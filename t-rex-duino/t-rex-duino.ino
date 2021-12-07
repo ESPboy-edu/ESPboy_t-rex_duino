@@ -7,13 +7,17 @@
  * License: MIT
 
 
+//PRESS A button on start to clear HIGH SCORE
+//PRESS B button on start to autoplay
+
+
 /* Hardware Connections */
 #define VERT_DISPLAY_OFFSET 20
 
 /* Misc. Settings */
-//#define AUTO_PLAY //uncomment to enable auto-play mode
-//#define RESET_HI_SCORE //uncomment to reset HI score, flash your device, than comment it back and flash again
 //#define PRINT_DEBUG_INFO
+
+bool autoPlay = false;
 
 /* Game Balance Settings */
 #define PLAYER_SAFE_ZONE_WIDTH 32 //minimum distance between obstacles (px)
@@ -241,13 +245,13 @@ void gameLoop(uint16_t &hiScore) {
       //delay(100);
     }
 
-#ifndef AUTO_PLAY
+if (!autoPlay){
     //constrols
     if(isPressedJump()) {if(!trex.isJumping())myESPboy.playTone(100,50); trex.jump();}
     bool prstDuck = isPressedDuck();
     if((prstDuck && trex.state != TrexPlayer::DUCK) && !trex.isJumping()) myESPboy.playTone(50,50);
-    trex.duck(prstDuck);
-#else
+    trex.duck(prstDuck);}
+else{
     const int8_t trexXright = trex.bitmap->width + trex.position.x;
     //auto jump
     if(
@@ -259,7 +263,7 @@ void gameLoop(uint16_t &hiScore) {
     trex.duck(
       (pterodactyl1.position.y <= 30 && pterodactyl1.position.y > 20 && pterodactyl1.position.x <= trexXright + 15 && pterodactyl1.position.x > trex.position.x)
     );
-#endif
+}
 
     //logic and animation step
     for(uint8_t i = 0; i < sprites.size(); ++i)
@@ -302,9 +306,12 @@ void setup() {
   spalshScreen();
   srand((randByte()<<8) | randByte());
 
-  if((myESPboy.getKeys()&PAD_ACT) || (myESPboy.getKeys()&PAD_ESC)){
+  if(myESPboy.getKeys()&PAD_ACT){
     EEPROM.put(EEPROM_HI_SCORE, hiScore);
     EEPROM.commit();}
+
+  if(myESPboy.getKeys()&PAD_ESC)
+    autoPlay = true;
 
   EEPROM.get(EEPROM_HI_SCORE, hiScore);
   if(hiScore == 0xFFFF) hiScore = 0;
