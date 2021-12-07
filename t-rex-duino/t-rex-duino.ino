@@ -5,31 +5,10 @@
  * Author: github.com/AlexIII
  * E-mail: endoftheworld@bk.ru
  * License: MIT
- * -------Hardware------
- * Board: Arduino Uno / Nano / Pro / pro mini
- * Display: OLED SSD1309 SPI 128x64  *OR*  SH1106/SSD1306 I2C 128x64 (130x64) (132x64)
-*/ 
+
 
 /* Hardware Connections */
-// -- Buttons --
-#define JUMP_BUTTON 6
-#define DUCK_BUTTON 5
-
-// -- Display Selection (uncomment ONE of the options) -- 
-#define LCD_SSD1309
-//#define LCD_SH1106      //If you see abnormal vertical line at the left edge of the display, select LCD_SSD1306
-//#define LCD_SSD1306     //If you see abnormal vertical line at the right edge of the display, select LCD_SH1106
-
-// -- Display Connection for SSD1309 --
-#define LCD_SSD1309_CS 2
-#define LCD_SSD1309_DC 3
-#define LCD_SSD1309_RESET 4
-//LCD_SSD1309_SDA -> 11 (SPI SCK)
-//LCD_SSD1309_SCL -> 13 (SPI MOSI)
-
-// -- Display Connection for SH1106/SSD1306 --
-//LCD_SH1106_SDA -> A4 (I2C SDA)
-//LCD_SH1106_SCL -> A5 (I2C SCL)
+#define VERT_DISPLAY_OFFSET 20
 
 /* Misc. Settings */
 //#define AUTO_PLAY //uncomment to enable auto-play mode
@@ -54,75 +33,108 @@
 #define LCD_HEIGHT 64U
 #define LCD_WIDTH 128U
 
-/* Render Settings */
-#ifdef LCD_SSD1309
-  //#define VIRTUAL_HEIGHT_BUFFER_ROWS_BY_8_PIXELS 1
-  #define VIRTUAL_WIDTH_BUFFER_COLS 16
-#else
-  //VIRTUAL_HEIGHT_BUFFER_ROWS_BY_8_PIXELS is not supported
-  #define VIRTUAL_HEIGHT_BUFFER_ROWS_BY_8_PIXELS 4
-#endif
-
 /* Includes */
-#include <EEPROM.h>
+#include <ESP_EEPROM.h>
 #include "array.h"
 #include "TrexPlayer.h"
 #include "Ground.h"
 #include "Cactus.h"
 #include "Pterodactyl.h"
 #include "HeartLive.h"
+#include "lib/ESPboyInit.h"
+#include "lib/ESPboyInit.cpp"
+
 
 /* Defines and globals */
 #define EEPROM_HI_SCORE 16 //2 bytes
 #define LCD_BYTE_SZIE (LCD_WIDTH*LCD_HEIGHT/8)
 
-#ifdef VIRTUAL_WIDTH_BUFFER_COLS
-  #define LCD_IF_VIRTUAL_WIDTH(TRUE_COND, FALSE_COND) TRUE_COND
-  #define LCD_PART_BUFF_WIDTH VIRTUAL_WIDTH_BUFFER_COLS
-  #define LCD_PART_BUFF_HEIGHT LCD_HEIGHT
-#else
-  #define LCD_IF_VIRTUAL_WIDTH(TRUE_COND, FALSE_COND) FALSE_COND
-  #ifdef VIRTUAL_HEIGHT_BUFFER_ROWS_BY_8_PIXELS
-    #define LCD_PART_BUFF_WIDTH LCD_WIDTH
-    #define LCD_PART_BUFF_HEIGHT (VIRTUAL_HEIGHT_BUFFER_ROWS_BY_8_PIXELS*8)
-  #else
-    #define LCD_PART_BUFF_WIDTH LCD_WIDTH
-    #define LCD_PART_BUFF_HEIGHT LCD_HEIGHT
-  #endif
-#endif
-#define LCD_PART_BUFF_SZ ((LCD_PART_BUFF_HEIGHT/8)*LCD_PART_BUFF_WIDTH)
+ESPboyInit myESPboy;
 
-#ifdef LCD_SSD1309
-  #include <SPI.h>
-  #include "SSD1309.h"
-  static SSD1309<SPIClass> lcd(SPI, LCD_SSD1309_CS, LCD_SSD1309_DC, LCD_SSD1309_RESET, LCD_BYTE_SZIE);
-#else
-  #include "I2C.h"
-  #include "SH1106.h"
-  I2C i2c;
-  SH1106<I2C> lcd(i2c, LCD_BYTE_SZIE);
-#endif
+uint8_t lcdBuff[LCD_HEIGHT*LCD_WIDTH/8];
+bool night = false;
 
 static uint16_t hiScore = 0;
 static bool firstStart = true;
 
+
+void writePixel(int16_t x, int16_t y, uint8_t color){
+  if (x < 0 || x > (LCD_WIDTH-1) || y < 0 || y > (LCD_HEIGHT-1)){
+    return;
+  }
+  uint8_t row = (uint8_t)y / 8;
+  if (color){
+    lcdBuff[(row*LCD_WIDTH) + (uint8_t)x] |=   _BV((uint8_t)y % 8);
+  }
+  else{
+    lcdBuff[(row*LCD_WIDTH) + (uint8_t)x] &= ~ _BV((uint8_t)y % 8);
+  }
+}
+
+void adafruitDrawBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w, int16_t h, uint16_t color) {
+
+  int16_t byteWidth = (w + 7) / 8; // Bitmap scanline pad = whole byte
+  uint8_t byte = 0;
+  
+  for (int16_t j = 0; j < h; j++, y++) {
+    for (int16_t i = 0; i < w; i++) {
+      if (i & 7)
+        byte <<= 1;
+      else
+        byte = pgm_read_byte(&bitmap[j * byteWidth + i / 8]);
+      if (byte & 0x80)
+        writePixel(x + i, y, color);
+    }
+  }
+}
+
+
+
+void display_display(){ 
+  static uint16_t oBuffer[LCD_WIDTH*16];
+  static uint8_t currentDataByte;
+  static uint16_t foregroundColor, backgroundColor, xPos, yPos, kPos, kkPos, addr;
+
+  if(!night){
+    backgroundColor = TFT_BLACK;
+    foregroundColor = TFT_YELLOW;}
+  else{
+    backgroundColor = TFT_YELLOW;
+    foregroundColor = TFT_BLACK;};
+ 
+  for(kPos = 0; kPos<4; kPos++){  //if exclude this 4 parts screen devision and process all the big oBuffer, EPS8266 resets (
+    kkPos = kPos<<1;
+    for (xPos = 0; xPos < LCD_WIDTH; xPos++) {
+      for (yPos = 0; yPos < 16; yPos++) {    
+        if (!(yPos % 8)) currentDataByte = lcdBuff[xPos + ((yPos>>3)+kkPos) * LCD_WIDTH];
+        addr =  yPos*LCD_WIDTH+xPos;
+            if (currentDataByte & 0x01) oBuffer[addr] = foregroundColor;
+            else oBuffer[addr] = backgroundColor;
+      currentDataByte = currentDataByte >> 1;
+    }
+    }
+    myESPboy.tft.pushImage(0, VERT_DISPLAY_OFFSET+kPos*16, LCD_WIDTH, 16, oBuffer);
+  }
+}
+
+
 /* Misc Functions */
 
 bool isPressedJump() {
-  return !digitalRead(JUMP_BUTTON);
+  return myESPboy.getKeys()&PAD_UP?1:0;
 }
 
 bool isPressedDuck() {
-  return !digitalRead(DUCK_BUTTON);
+   return myESPboy.getKeys()&PAD_DOWN?1:0;
 }
 
 uint8_t randByte() {
-  static uint16_t c = 0xA7E2;
-  c = (c << 1) | (c >> 15);
-  c = (c << 1) | (c >> 15);
-  c = (c << 1) | (c >> 15);
-  c = analogRead(A2) ^ analogRead(A3) ^ analogRead(A4) ^ analogRead(A5) ^ analogRead(A6) ^ analogRead(A7) ^ c;
-  return c;
+  //static uint16_t c = 0xA7E2;
+  //c = (c << 1) | (c >> 15);
+  //c = (c << 1) | (c >> 15);
+  //c = (c << 1) | (c >> 15);
+  //c = analogRead(A2) ^ analogRead(A3) ^ analogRead(A4) ^ analogRead(A5) ^ analogRead(A6) ^ analogRead(A7) ^ c;
+  return random(255);
 }
 
 /* Main Functions */
@@ -138,14 +150,10 @@ void renderNumber(BitCanvas& canvas, Point2Di8 point, const uint16_t number) {
 }
 
 void gameLoop(uint16_t &hiScore) {
-  uint8_t lcdBuff[LCD_PART_BUFF_SZ];
-  VirtualBitCanvas bitCanvas(
-    LCD_IF_VIRTUAL_WIDTH(VirtualBitCanvas::VIRTUAL_WIDTH, VirtualBitCanvas::VIRTUAL_HEIGHT), 
-    lcdBuff, 
-    LCD_PART_BUFF_HEIGHT,
-    LCD_PART_BUFF_WIDTH,
-    LCD_IF_VIRTUAL_WIDTH(LCD_WIDTH, LCD_HEIGHT) //virtual size in selected direction
-  );
+
+  delay(0);
+  
+  VirtualBitCanvas bitCanvas (VirtualBitCanvas::VIRTUAL_WIDTH, lcdBuff, LCD_HEIGHT, LCD_WIDTH, LCD_WIDTH);
 
   SpawnHold spawnHolder;
 
@@ -173,13 +181,14 @@ void gameLoop(uint16_t &hiScore) {
   uint16_t score = 0;
   uint8_t targetFPS = TARGET_FPS_START;
   uint8_t lives = LIVES_START;
-  bool night = false;
-  lcd.setInverse(night);
+  //lcd.setInverse(night);
 
   //main cycle
   while(1) {
+    delay(0);
     //render cycle
     while(1) {
+      delay(0);
       //score
       bitCanvas.render(hiSprite);
       renderNumber(bitCanvas, {60, 0}, hiScore);
@@ -194,7 +203,8 @@ void gameLoop(uint16_t &hiScore) {
         bitCanvas.render(restartIconSprite);
       }
       //update screen
-      lcd.fillScreen(lcdBuff, LCD_PART_BUFF_SZ, LCD_IF_VIRTUAL_WIDTH(LCD_PART_BUFF_WIDTH, 0));
+      display_display();
+      //lcd.fillScreen(lcdBuff, LCD_PART_BUFF_SZ, LCD_IF_VIRTUAL_WIDTH(LCD_PART_BUFF_WIDTH, 0));
       if(bitCanvas.nextPart()) break;
     }
 
@@ -209,8 +219,17 @@ void gameLoop(uint16_t &hiScore) {
       if(lives) {
         trex.blink();
         --lives;
+        myESPboy.playTone(20,100);
+        //delay(100);
+        
       } else {
         trex.die();
+        myESPboy.playTone(100,500);
+        delay(100);
+        myESPboy.playTone(50,300);
+        delay(500);
+        myESPboy.playTone(10,1100);
+        delay(1000);        
         gameOver = true;
         continue;
       }
@@ -218,12 +237,16 @@ void gameLoop(uint16_t &hiScore) {
     if(lives < LIVES_MAX && CollisionDetector::check(trex, heartLive)) {
       ++lives;
       heartLive.eat();
+      myESPboy.playTone(200,100);
+      //delay(100);
     }
 
 #ifndef AUTO_PLAY
     //constrols
-    if(isPressedJump()) trex.jump();
-    trex.duck(isPressedDuck());
+    if(isPressedJump()) {if(!trex.isJumping())myESPboy.playTone(100,50); trex.jump();}
+    bool prstDuck = isPressedDuck();
+    if((prstDuck && trex.state != TrexPlayer::DUCK) && !trex.isJumping()) myESPboy.playTone(50,50);
+    trex.duck(prstDuck);
 #else
     const int8_t trexXright = trex.bitmap->width + trex.position.x;
     //auto jump
@@ -247,7 +270,7 @@ void gameLoop(uint16_t &hiScore) {
     if(!(score%INCREASE_FPS_EVERY_N_SCORE_POINTS) && targetFPS < TARGET_FPS_MAX) ++targetFPS;
     heartsSprite.limitRenderWidthTo = 6*lives + 1;
     //switch day and night
-    if(!(score%DAY_NIGHT_SWITCH_CYCLES)) lcd.setInverse(night = !night);
+    if(!(score%DAY_NIGHT_SWITCH_CYCLES)) night = !night;
 
     const uint8_t frameTime = 1000/targetFPS;
 #ifdef PRINT_DEBUG_INFO
@@ -267,26 +290,22 @@ void gameLoop(uint16_t &hiScore) {
 }
 
 void spalshScreen() {
-  lcd.setAddressingMode(lcd.HorizontalAddressingMode);
-  uint8_t buff[32];
-  for(uint8_t i = 0; i < LCD_BYTE_SZIE/sizeof(buff); ++i) {
-    memcpy_P(buff, splash_screen_bitmap + 2 + uint16_t(i) * sizeof(buff), sizeof(buff));
-    lcd.fillScreen(buff, sizeof(buff));
-  }
-  for(uint8_t i = 50; i && !isPressedJump(); --i) delay(100);
+  adafruitDrawBitmap(0, 0, trexsplash, 128, 64, TFT_YELLOW); 
+  display_display();
+  while (!myESPboy.getKeys()) delay(100);
 }
 
 void setup() {
-  pinMode(JUMP_BUTTON, INPUT_PULLUP);
-  pinMode(DUCK_BUTTON, INPUT_PULLUP);
-  Serial.begin(250000);
-  lcd.begin();
+  Serial.begin(115200);
+  EEPROM.begin(100);
+  myESPboy.begin("T-rex duino");
   spalshScreen();
-  lcd.setAddressingMode(LCD_IF_VIRTUAL_WIDTH(lcd.VerticalAddressingMode, lcd.HorizontalAddressingMode));
   srand((randByte()<<8) | randByte());
-#ifdef RESET_HI_SCORE
-  EEPROM.put(EEPROM_HI_SCORE, hiScore);
-#endif
+
+  if((myESPboy.getKeys()&PAD_ACT) || (myESPboy.getKeys()&PAD_ESC)){
+    EEPROM.put(EEPROM_HI_SCORE, hiScore);
+    EEPROM.commit();}
+
   EEPROM.get(EEPROM_HI_SCORE, hiScore);
   if(hiScore == 0xFFFF) hiScore = 0;
 }
@@ -296,6 +315,7 @@ void loop() {
     firstStart = false;
     gameLoop(hiScore);
     EEPROM.put(EEPROM_HI_SCORE, hiScore);
+    EEPROM.commit();
     //wait until the jump button is released
     while(isPressedJump()) delay(100);
     delay(500);

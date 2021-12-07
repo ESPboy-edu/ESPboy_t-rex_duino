@@ -11,6 +11,12 @@
 #define _ENGINE_TYPES_H_
 #include <stdint.h>
 
+
+
+#define min(a,b) ((a) < (b) ? (a) : (b))
+#define max(a,b) ((a) > (b) ? (a) : (b))
+#define abs(a) ((a<0)?(-a):(a))
+
 /* General */
 
 struct flash_uint8_t {
